@@ -1,0 +1,13 @@
+*.sdf
+*.opensdf
+*.user
+*.suo
+*.aps
+*.ipch
+*.plg
+*.opt
+*.ncb
+wasm3.h
+Debug/
+Release/
+.vs/

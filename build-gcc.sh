@@ -1,0 +1,3 @@
+echo Building \'CHDtoOGG\' ...
+g++ -std=c++11 -O3 -Wall CHDtoOGG.cpp EncodeVorbis.wasm.cpp -o CHDtoOGG
+echo Done!
