@@ -302,7 +302,7 @@ int main(int argc, const char** argv)
 			"  -q <LEVEL> : Quality level 0 to 10, defaults to 8\n"
 			"  -n         : Output an empty data track\n"
 			"  -x         : Print XML DAT meta data\n"
-			"\n", "CHDtoOGG", "1.0");
+			"\n", "CHDtoOGG", "1.1");
 		return 1;
 	}
 	int qualityRaw = (qualityStr ? atoi(qualityStr) : 8);
