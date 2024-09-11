@@ -387,28 +387,12 @@ int main(int argc, const char** argv)
 		if (fscanf(fCHD,
 			(metaentry_metatag == CDROM_TRACK_METADATA2_TAG ? "TRACK:%d TYPE:%30s SUBTYPE:%30s FRAMES:%d PREGAP:%d" : "TRACK:%d TYPE:%30s SUBTYPE:%30s FRAMES:%d"),
 			&mt_track_no, mt_type, mt_subtype, &mt_frames, &mt_pregap) < 4) continue;
+		if (mt_frames < mt_pregap) { chd_errstr = "Error: Track pregap is larger than total track frame count\n"; goto chderr; }
 
 		// In CHD files tracks are padded to a to a 4-sector boundary.
 		track_frame += ((CD_TRACK_PADDING - (track_frame % CD_TRACK_PADDING)) % CD_TRACK_PADDING);
 
-		// Read track data and calculate hashes (CHD sectorSize is always 2448, data_size is based on chdman source, except MODE2_FORM2 is treated same as MODE2_FORM1 because sector size 2324 is unsupported in BIN/CUE)
 		const bool isAudio = !strcmp(mt_type, "AUDIO");
-		const bool ds2048 = !strcmp(mt_type, "MODE1") || !strcmp(mt_type, "MODE2_FORM1") || !strcmp(mt_type, "MODE2_FORM2");
-		const bool ds2336 = !strcmp(mt_type, "MODE2") || !strcmp(mt_type, "MODE2_FORM_MIX");
-		const size_t data_size = (ds2048 ? 2048 : ds2336 ? 2336 : CD_MAX_SECTOR_DATA);
-		const size_t track_size = (size_t)mt_frames * data_size;
-		Bit8u* track_data = (Bit8u*)malloc(track_size), *track_out = track_data;
-		for (Bit32u track_frame_end = track_frame + mt_frames; track_frame != track_frame_end; track_frame++, track_out += data_size)
-		{
-			size_t p = track_frame * CD_FRAME_SIZE, hunk = (p / chd_hunkbytes), hunk_ofs = (p % chd_hunkbytes), hunk_pos = chd_hunkmap[hunk];
-			if (!hunk_pos) { memset(track_out, 0, data_size); continue; }
-			fseek_wrap(fCHD, hunk_pos + hunk_ofs, SEEK_SET);
-			if (!fread(track_out, data_size, 1, fCHD)) { free(track_data); chd_errstr = "Error: Failed to read from source file '%s'\n"; goto chderr; }
-		}
-
-		if (cueTracks.size() < (size_t)mt_track_no) { cueTracks.resize((size_t)mt_track_no); xmlTracks.resize((size_t)mt_track_no); }
-		std::vector<char> &cueTrack = cueTracks[mt_track_no-1], &xmlTrack = xmlTracks[mt_track_no-1];
-
 		pathTrack.resize(pathTrackBaseLen);
 		pathTrack.append(" (Track ");
 		if (mt_track_no > 99) pathTrack += (char)('0' + (mt_track_no/100)%10);
@@ -418,6 +402,33 @@ int main(int argc, const char** argv)
 		FILE* fOut = fopen(pathTrack.c_str(), "wb");
 		fprintf(stderr, "%s track %d %s ...\n", (isAudio ? "Compressing" : "Writing"), mt_track_no, pathTrack.c_str());
 		if (!fOut) { chd_errstr = "Error: Unable to write track file\n"; goto chderr; }
+
+		// Read track data and calculate hashes (CHD sectorSize is always 2448, data_size is based on chdman source, except MODE2_FORM2 is treated same as MODE2_FORM1 because sector size 2324 is unsupported in BIN/CUE)
+		const bool ds2048 = !strcmp(mt_type, "MODE1") || !strcmp(mt_type, "MODE2_FORM1") || !strcmp(mt_type, "MODE2_FORM2");
+		const bool ds2336 = !strcmp(mt_type, "MODE2") || !strcmp(mt_type, "MODE2_FORM_MIX");
+		const size_t data_size = (ds2048 ? 2048 : ds2336 ? 2336 : CD_MAX_SECTOR_DATA);
+		const size_t track_size = (size_t)(mt_frames - mt_pregap) * data_size;
+		const Bit32u track_pregap_end = track_frame + mt_pregap, track_frame_end = track_frame + mt_frames;
+		for (; track_frame < track_pregap_end; track_frame++) // verify pregap to contain no actual audio data
+		{
+			size_t p = track_frame * CD_FRAME_SIZE, hunk = (p / chd_hunkbytes), hunk_ofs = (p % chd_hunkbytes), hunk_pos = chd_hunkmap[hunk];
+			if (!hunk_pos) continue; // all zeroes
+			Bit8u pregap_sector[CD_MAX_SECTOR_DATA];
+			fseek_wrap(fCHD, hunk_pos + hunk_ofs, SEEK_SET);
+			if (!fread(pregap_sector, CD_MAX_SECTOR_DATA, 1, fCHD)) { chd_errstr = "Error: Failed to read from source file '%s'\n"; goto chderr; }
+			if (CRC32(pregap_sector, CD_MAX_SECTOR_DATA) != 0xbe97ce3f /* 2352 zeroed bytes */) { fprintf(stderr, "  Warning: Pregap for track %d contains audio data which will get omitted in exported OGG\n", mt_track_no); fflush(stderr); track_frame = track_pregap_end; }
+		}
+		Bit8u* track_data = (Bit8u*)malloc(track_size), *track_out = track_data;
+		for (; track_frame < track_frame_end; track_frame++, track_out += data_size)
+		{
+			size_t p = track_frame * CD_FRAME_SIZE, hunk = (p / chd_hunkbytes), hunk_ofs = (p % chd_hunkbytes), hunk_pos = chd_hunkmap[hunk];
+			if (!hunk_pos) { memset(track_out, 0, data_size); continue; }
+			fseek_wrap(fCHD, hunk_pos + hunk_ofs, SEEK_SET);
+			if (!fread(track_out, data_size, 1, fCHD)) { free(track_data); chd_errstr = "Error: Failed to read from source file '%s'\n"; goto chderr; }
+		}
+
+		if (cueTracks.size() < (size_t)mt_track_no) { cueTracks.resize((size_t)mt_track_no); xmlTracks.resize((size_t)mt_track_no); }
+		std::vector<char> &cueTrack = cueTracks[mt_track_no-1], &xmlTrack = xmlTracks[mt_track_no-1];
 		
 		struct Encode
 		{
@@ -480,11 +491,17 @@ int main(int argc, const char** argv)
 		fwrite(enc.rombuf, enc.romlen, 1, fOut);
 		fclose(fOut);
 
-		cueTrack.resize(130 + (pathTrack.size() - pathDirLen));
+		cueTrack.resize(160 + (pathTrack.size() - pathDirLen));
 		char *pcue = &cueTrack[0], binTrackType[16];
 		sprintf(binTrackType, (isAudio ? "AUDIO" : "MODE%c/%04d"), (noData ? '1' : mt_type[4]), (noData ? 2352 : (int)data_size)); //noData is MODE1/2352
 		pcue += sprintf(pcue, "FILE \"%s\" %s\r\n", (pathTrack.c_str() + pathDirLen), (isAudio ? "MP3" : "BINARY"));
 		pcue += sprintf(pcue, "  TRACK %02d %s\r\n", mt_track_no, binTrackType);
+		if (mt_pregap)
+		{
+			// We exclude the pregap data from the OGG encode and use the PREGAP tag to indicate that it has been omitted.
+			// Alternative would be to include the pregap data and use a pair pf INDEX 00 and INDEX 01 tags but it is not well supported by existing emulators.
+			pcue += sprintf(pcue, "    PREGAP %02d:%02d:%02d\r\n", (mt_pregap/(60*75))%60, (mt_pregap/75)%60, mt_pregap%75);
+		}
 		pcue += sprintf(pcue, "    INDEX 01 00:00:00\r\n");
 
 		if (showXML)
