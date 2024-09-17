@@ -470,8 +470,8 @@ int main(int argc, const char** argv)
 			for (Bit8u *p = track_data, *pEnd = p + track_size, tmp; p != pEnd; p += 2)
 				{ tmp = p[0]; p[0] = p[1]; p[1] = tmp; }
 			// Additional info for audio tracks
-			for (in_zeros = 0; in_zeros != track_size && track_data[in_zeros] == 0; in_zeros++) {}
-			for (out_zeros = 0; out_zeros != track_size && track_data[track_size - 1 - out_zeros] == 0; out_zeros++) {}
+			for (; in_zeros != track_size && track_data[in_zeros] == 0; in_zeros++) {}
+			if (in_zeros != track_size) for (; out_zeros != track_size && track_data[track_size - 1 - out_zeros] == 0; out_zeros++) {}
 
 			enc.wavpcm = track_data;
 			enc.wavpcmlen = track_size;
