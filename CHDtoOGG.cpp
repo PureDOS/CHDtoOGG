@@ -530,9 +530,9 @@ int main(int argc, const char** argv)
 			for (int srcmd5i = 0; srcmd5i != 16; srcmd5i++) pxml += sprintf(pxml, "%02x", srcmd5[srcmd5i]);
 			pxml += sprintf(pxml, "\" sha1=\"");
 			for (int srcsha1i = 0; srcsha1i != 20; srcsha1i++) pxml += sprintf(pxml, "%02x", srcsha1[srcsha1i]);
-			if (isAudio) pxml += sprintf(pxml, "\" in_zeros=\"%u\" out_zeros=\"%u\" trimmed_crc=\"%08x\" quality=\"%d\"", in_zeros, out_zeros, CRC32(track_data + in_zeros, (size_t)(track_size - in_zeros - out_zeros)), quality);
-			if (isAudio && pregap_size > in_zeros) pxml += sprintf(pxml, " non_silence_pregap=\"1\"");
-			pxml += sprintf(pxml, "/>\n\t\t</rom>\n", in_zeros, out_zeros, CRC32(track_data + in_zeros, (size_t)(track_size - in_zeros - out_zeros)), quality);
+			if (isAudio) pxml += sprintf(pxml, "\" in_zeros=\"%u\" out_zeros=\"%u\" trimmed_crc=\"%08x\" quality=\"%d", in_zeros, out_zeros, CRC32(track_data + in_zeros, (size_t)(track_size - in_zeros - out_zeros)), quality);
+			if (isAudio && pregap_size > in_zeros) pxml += sprintf(pxml, "\" non_silence_pregap=\"1");
+			pxml += sprintf(pxml, "\"/>\n\t\t</rom>\n", in_zeros, out_zeros, CRC32(track_data + in_zeros, (size_t)(track_size - in_zeros - out_zeros)), quality);
 		}
 		if (enc.rombuf != track_data && enc.rombuf != emptyDataTrackBin) free(enc.rombuf);
 		free(track_data);
