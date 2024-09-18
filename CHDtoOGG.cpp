@@ -514,9 +514,11 @@ int main(int argc, const char** argv)
 			FastMD5(enc.rombuf, enc.romlen, rommd5);
 			SHA1(enc.rombuf, enc.romlen, romsha1);
 
+			for (size_t posAmp = pathDirLen - 1; (posAmp = pathTrack.find('&', posAmp + 1)) != std::string::npos;) pathTrack.insert(posAmp + 1, "amp;"); // encode & to &amp;
 			xmlTrack.resize(540 + (pathTrack.size() - pathDirLen));
 			char* pxml = &xmlTrack[0];
 			pxml += sprintf(pxml, "\t\t<rom name=\"%s\" size=\"%u\" crc=\"%08x\" md5=\"", (pathTrack.c_str() + pathDirLen), (unsigned)enc.romlen, romcrc32);
+			for (size_t posAmp = pathDirLen - 1; (posAmp = pathTrack.find('&', posAmp + 1)) != std::string::npos;) pathTrack.replace(posAmp + 1, 4, ""); // revert &amp; to &
 			for (int rommd5i = 0; rommd5i != 16; rommd5i++) pxml += sprintf(pxml, "%02x", rommd5[rommd5i]);
 			pxml += sprintf(pxml, "\" sha1=\"");
 			for (int romsha1i = 0; romsha1i != 20; romsha1i++) pxml += sprintf(pxml, "%02x", romsha1[romsha1i]);
