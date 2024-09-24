@@ -522,7 +522,7 @@ int main(int argc, const char** argv)
 			for (int rommd5i = 0; rommd5i != 16; rommd5i++) pxml += sprintf(pxml, "%02x", rommd5[rommd5i]);
 			pxml += sprintf(pxml, "\" sha1=\"");
 			for (int romsha1i = 0; romsha1i != 20; romsha1i++) pxml += sprintf(pxml, "%02x", romsha1[romsha1i]);
-			pxml += sprintf(pxml, (isAudio ? "\">\n" : "\"/>\n"));
+			pxml += sprintf(pxml, "\">\n");
 
 			Bit32u srccrc32; Bit8u srcmd5[16], srcsha1[20];
 			if (track_data != enc.rombuf) { srccrc32 = CRC32(track_data, (size_t)track_size); FastMD5(track_data, (size_t)track_size, srcmd5); SHA1(track_data, (size_t)track_size, srcsha1); }
