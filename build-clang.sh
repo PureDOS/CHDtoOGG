@@ -1,3 +1,3 @@
 echo Building \'CHDtoOGG\' ...
-clang++ -std=c++11 -O3 -Wall CHDtoOGG.cpp EncodeVorbis.wasm.cpp -o CHDtoOGG
+clang++ -std=c++11 -O3 -Wall CHDtoOGG.cpp WasmEncodeVorbis.cpp -o CHDtoOGG
 echo Done!
