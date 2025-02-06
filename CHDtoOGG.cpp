@@ -33,9 +33,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <string>
 #include <vector>
 
-#define WASM_RT_FROM_INVOKER
-#include "EncodeVorbis.wasm-rt.h"
-
 typedef unsigned char Bit8u;
 typedef unsigned short Bit16u;
 typedef signed short Bit16s;
@@ -61,6 +58,11 @@ typedef unsigned long long Bit64u;
 
 #define CHD_READ_BE32(p) ((Bit32u)((((const Bit8u *)(p))[0] << 24) | (((const Bit8u *)(p))[1] << 16) | (((const Bit8u *)(p))[2] << 8) | ((const Bit8u *)(p))[3]))
 #define CHD_READ_BE64(p) ((Bit64u)((((Bit64u)((const Bit8u *)(p))[0] << 56) | ((Bit64u)((const Bit8u *)(p))[1] << 48) | ((Bit64u)((const Bit8u *)(p))[2] << 40) | ((Bit64u)((const Bit8u *)(p))[3] << 32) | ((Bit64u)((const Bit8u *)(p))[4] << 24) | ((Bit64u)((const Bit8u *)(p))[5] << 16) | ((Bit64u)((const Bit8u *)(p))[6] << 8) | (Bit64u)((const Bit8u *)(p))[7])))
+
+// Not thread-safe due to WASM_RT's static memory
+typedef Bit32u (*fnEncodeVorbisFeedSamples)(float* bufL, float* bufR, Bit32u num, void* user_data);
+typedef void (*fnEncodeVorbisOutput)(const void* data, Bit32u len, void* user_data);
+extern void WasmEncodeVorbis(int quality, fnEncodeVorbisFeedSamples feed, fnEncodeVorbisOutput outpt, void* user_data);
 
 static Bit32u CRC32(const void *data, size_t data_size)
 {
@@ -253,15 +255,15 @@ int main(int argc, const char** argv)
 	{
 		enum { TEST_LEN = 5000, TEST_EXPECT_CRC = 0x79d89c91 };
 		float buf[TEST_LEN], *bufp; Bit32u crc;
-		static uint32_t FeedSamples(float* bufL, float* bufR, uint32_t num, TestEncode* self)
+		static Bit32u FeedSamples(float* bufL, float* bufR, Bit32u num, TestEncode* self)
 		{
-			uint32_t remain = (uint32_t)(self->buf + TEST_LEN - self->bufp);
+			Bit32u remain = (Bit32u)(self->buf + TEST_LEN - self->bufp);
 			if (remain < num) num = remain;
 			memcpy(bufL, self->bufp, num*4); memcpy(bufR, self->bufp, num*4);
 			self->bufp += num;
 			return num;
 		}
-		static void OggOutput(const void* data, uint32_t len, TestEncode* self) { self->crc ^= CRC32(data, len); }
+		static void OggOutput(const void* data, Bit32u len, TestEncode* self) { self->crc ^= CRC32(data, len); }
 	} *testenc = (TestEncode*)malloc(sizeof(TestEncode));
 
 	for (float *bufp = testenc->buf, *bufpend = bufp + TestEncode::TEST_LEN, seed = 0; bufp != bufpend; bufp++)
@@ -425,23 +427,23 @@ int main(int argc, const char** argv)
 			size_t wavpcmlen, wavpcmpos, romcap, romlen;
 			Bit8u *wavpcm, *rombuf;
 
-			static uint32_t FeedSamples(float* bufL, float* bufR, uint32_t num, Encode* self)
+			static Bit32u FeedSamples(float* bufL, float* bufR, Bit32u num, Encode* self)
 			{
-				uint32_t remain = (uint32_t)((self->wavpcmlen - self->wavpcmpos) / 4);
+				Bit32u remain = (Bit32u)((self->wavpcmlen - self->wavpcmpos) / 4);
 				if (remain < num) num = remain;
 				signed char* pcm = (signed char*)(self->wavpcm + self->wavpcmpos);
-				for (uint32_t i = 0; i != num; i++, pcm += 4)
+				for (Bit32u i = 0; i != num; i++, pcm += 4)
 				{
 					bufL[i] = ((pcm[1] << 8) | (0x00ff & (int)pcm[0])) / 32768.f;
 					bufR[i] = ((pcm[3] << 8) | (0x00ff & (int)pcm[2])) / 32768.f;
 				}
 				if (!self->wavpcmpos && self->wavpcmlen >= 1024*1024) { fprintf(stderr, "  Progress: 0%%"); fflush(stderr); }
 				self->wavpcmpos += num * 4;
-				if ((self->wavpcmpos / (1024*1024)) != ((self->wavpcmpos - (num * 4)) / (1024*1024))) { fprintf(stderr, " .. %u%%", (uint32_t)(((uint64_t)self->wavpcmpos * 100 + 50) / self->wavpcmlen)); fflush(stderr); }
+				if ((self->wavpcmpos / (1024*1024)) != ((self->wavpcmpos - (num * 4)) / (1024*1024))) { fprintf(stderr, " .. %u%%", (Bit32u)(((Bit64u)self->wavpcmpos * 100 + 50) / self->wavpcmlen)); fflush(stderr); }
 				if (self->wavpcmpos == self->wavpcmlen && self->wavpcmlen >= 1024*1024 && num) fprintf(stderr, "\n");
 				return num;
 			}
-			static void OggOutput(const void* data, uint32_t len, Encode* self)
+			static void OggOutput(const void* data, Bit32u len, Encode* self)
 			{
 				while (self->romlen + len > self->romcap) self->rombuf = (Bit8u*)realloc(self->rombuf, (self->romcap += 1024*1024));
 				memcpy(self->rombuf + self->romlen, data, len);
@@ -577,6 +579,7 @@ void GetEmptyDataTrackBin(Bit8u* out)
 }
 
 #if 0 // To use EncodeVorbis.c directly without the wasm recompile (warning: can break determinism of outcome)
+#include <stdint.h>
 extern "C" { extern void EncodeVorbis(int); uint32_t EncodeVorbisFeedSamples(float **buffer, uint32_t num); void EncodeVorbisOutput(const void* data, uint32_t len); };
 static fnEncodeVorbisFeedSamples _cur_feed; static fnEncodeVorbisOutput _cur_outpt; static void* _cur_user_data;
 uint32_t EncodeVorbisFeedSamples(float **buffer, uint32_t num) { return _cur_feed(buffer[0], buffer[1], num, _cur_user_data); }
