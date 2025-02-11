@@ -374,7 +374,7 @@ int main(int argc, const char** argv)
 	Bit32u track_frame = 0;
 	for (Bit64u metaentry_offset = metaoffset, metaentry_next; metaentry_offset != 0; metaentry_offset = metaentry_next)
 	{
-		char mt_type[32], mt_subtype[32];
+		char mt_type[32], mt_subtype[32], mt_pgtype[32];
 		if (chd_size < metaentry_offset + METADATA_HEADER_SIZE) goto chderr;
 		Bit8u raw_meta_header[METADATA_HEADER_SIZE];
 		fseek_wrap(fCHD, metaentry_offset, SEEK_SET);
@@ -387,8 +387,8 @@ int main(int argc, const char** argv)
 
 		int mt_track_no = 0, mt_frames = 0, mt_pregap = 0;
 		if (fscanf(fCHD,
-			(metaentry_metatag == CDROM_TRACK_METADATA2_TAG ? "TRACK:%d TYPE:%30s SUBTYPE:%30s FRAMES:%d PREGAP:%d" : "TRACK:%d TYPE:%30s SUBTYPE:%30s FRAMES:%d"),
-			&mt_track_no, mt_type, mt_subtype, &mt_frames, &mt_pregap) < 4) continue;
+			(metaentry_metatag == CDROM_TRACK_METADATA2_TAG ? "TRACK:%d TYPE:%30s SUBTYPE:%30s FRAMES:%d PREGAP:%d PGTYPE:%30s" : "TRACK:%d TYPE:%30s SUBTYPE:%30s FRAMES:%d"),
+			&mt_track_no, mt_type, mt_subtype, &mt_frames, &mt_pregap, mt_pgtype) < 4) continue;
 		if (mt_pregap > mt_frames) { chd_errstr = "Error: Track pregap is larger than total track frame count\n"; goto chderr; }
 
 		// In CHD files tracks are padded to a to a 4-sector boundary.
@@ -409,7 +409,7 @@ int main(int argc, const char** argv)
 		const bool ds2048 = !strcmp(mt_type, "MODE1") || !strcmp(mt_type, "MODE2_FORM1") || !strcmp(mt_type, "MODE2_FORM2");
 		const bool ds2336 = !strcmp(mt_type, "MODE2") || !strcmp(mt_type, "MODE2_FORM_MIX");
 		const size_t data_size = (ds2048 ? 2048 : ds2336 ? 2336 : CD_MAX_SECTOR_DATA);
-		const size_t track_size = (size_t)mt_frames * data_size, pregap_size = (size_t)mt_pregap * data_size;
+		const size_t track_size = (size_t)mt_frames * data_size;
 		Bit8u* track_data = (Bit8u*)malloc(track_size), *track_out = track_data;
 		for (Bit32u track_frame_end = track_frame + mt_frames; track_frame != track_frame_end; track_frame++, track_out += data_size)
 		{
@@ -455,19 +455,33 @@ int main(int argc, const char** argv)
 		extern void GetEmptyDataTrackBin(Bit8u*);
 		static Bit8u emptyDataTrackBin[21 * 2048];
 
-		Bit32u in_zeros = 0, out_zeros = 0;
+		Bit32u non_silence_pregap = 0, wav_in_zeros = 0, wav_out_zeros = 0;
 		if (isAudio)
 		{
 			// CHD audio endian swap
 			for (Bit8u *p = track_data, *pEnd = p + track_size, tmp; p != pEnd; p += 2)
 				{ tmp = p[0]; p[0] = p[1]; p[1] = tmp; }
-			// Additional info for audio tracks
-			for (; in_zeros != track_size && track_data[in_zeros] == 0; in_zeros++) {}
-			if (in_zeros != track_size) for (; out_zeros != track_size && track_data[track_size - 1 - out_zeros] == 0; out_zeros++) {}
-			if (pregap_size > in_zeros) { fprintf(stderr, "  Warning: Pregap for track %d contains audio data which will get omitted in exported OGG\n", mt_track_no); fflush(stderr); }
+			enc.wavpcm = track_data;
+			enc.wavpcmlen = track_size;
 
-			enc.wavpcm = track_data + pregap_size;
-			enc.wavpcmlen = track_size - pregap_size;
+			// We always exclude the pregap data from the OGG encode and use the PREGAP cue sheet tag to indicate that it has been omitted.
+			// Alternative would be to include the pregap data and use a pair of INDEX 00 and INDEX 01 tags but it is not well supported by existing emulators.
+			if (mt_pregap && mt_pgtype[0] == 'V')
+			{
+				// Skip pregap if its part of the track data
+				Bit32u pregap_zeros = 0, pregap_size = (Bit32u)mt_pregap * (Bit32u)data_size;
+				for (; pregap_zeros != pregap_size && track_data[pregap_zeros] == 0; pregap_zeros++) {}
+				non_silence_pregap = (pregap_zeros < pregap_size);
+				if (non_silence_pregap) { fprintf(stderr, "  Warning: Pregap for track %d contains audio data which will get omitted in exported OGG\n", mt_track_no); fflush(stderr); }
+				enc.wavpcm += pregap_size;
+				enc.wavpcmlen -= pregap_size;
+				mt_pgtype[0] = 'A'; // output in CUE and XML as omitted
+				mt_frames -= mt_pregap; // output in XML as omitted
+			}
+
+			for (; wav_in_zeros != enc.wavpcmlen && enc.wavpcm[wav_in_zeros] == 0; wav_in_zeros++) {}
+			if (wav_in_zeros != enc.wavpcmlen) { for (; wav_out_zeros != enc.wavpcmlen && enc.wavpcm[enc.wavpcmlen - 1 - wav_out_zeros] == 0; wav_out_zeros++) {} }
+
 			WasmEncodeVorbis(quality, (fnEncodeVorbisFeedSamples)Encode::FeedSamples, (fnEncodeVorbisOutput)Encode::OggOutput, &enc);
 		}
 		else if (noData)
@@ -494,18 +508,17 @@ int main(int argc, const char** argv)
 			// Data or audio track without pregap
 			pcue += sprintf(pcue, "    INDEX 01 00:00:00\r\n");
 		}
-		else if (isAudio)
+		else if (mt_pgtype[0] == 'V')
 		{
-			// We exclude the pregap data from the OGG encode and use the PREGAP tag to indicate that it has been omitted.
-			// Alternative would be to include the pregap data and use a pair of INDEX 00 and INDEX 01 tags but it is not well supported by existing emulators.
-			pcue += sprintf(pcue, "    PREGAP %02d:%02d:%02d\r\n", (mt_pregap/(60*75))%60, (mt_pregap/75)%60, mt_pregap%75);
-			pcue += sprintf(pcue, "    INDEX 01 00:00:00\r\n");
+			// Data track with included pregap use a pair of INDEX 00 and INDEX 01 tags
+			pcue += sprintf(pcue, "    INDEX 00 00:00:00\r\n");
+			pcue += sprintf(pcue, "    INDEX 01 %02d:%02d:%02d\r\n", (mt_pregap/(60*75))%60, (mt_pregap/75)%60, mt_pregap%75);
 		}
 		else
 		{
-			// Data track with pregap use a pair of INDEX 00 and INDEX 01 tags
-			pcue += sprintf(pcue, "    INDEX 00 00:00:00\r\n");
-			pcue += sprintf(pcue, "    INDEX 01 %02d:%02d:%02d\r\n", (mt_pregap/(60*75))%60, (mt_pregap/75)%60, mt_pregap%75);
+			// Data track with omitted pregap use PREGAP and INDEX 01 tags
+			pcue += sprintf(pcue, "    PREGAP %02d:%02d:%02d\r\n", (mt_pregap/(60*75))%60, (mt_pregap/75)%60, mt_pregap%75);
+			pcue += sprintf(pcue, "    INDEX 01 00:00:00\r\n");
 		}
 
 		if (showXML)
@@ -517,26 +530,36 @@ int main(int argc, const char** argv)
 			SHA1(enc.rombuf, enc.romlen, romsha1);
 
 			for (size_t posAmp = pathDirLen - 1; (posAmp = pathTrack.find('&', posAmp + 1)) != std::string::npos;) pathTrack.insert(posAmp + 1, "amp;"); // encode & to &amp;
-			xmlTrack.resize(540 + (pathTrack.size() - pathDirLen));
+			xmlTrack.resize(544 + (pathTrack.size() - pathDirLen));
 			char* pxml = &xmlTrack[0];
 			pxml += sprintf(pxml, "\t\t<rom name=\"%s\" size=\"%u\" crc=\"%08x\" md5=\"", (pathTrack.c_str() + pathDirLen), (unsigned)enc.romlen, romcrc32);
 			for (size_t posAmp = pathDirLen - 1; (posAmp = pathTrack.find('&', posAmp + 1)) != std::string::npos;) pathTrack.replace(posAmp + 1, 4, ""); // revert &amp; to &
 			for (int rommd5i = 0; rommd5i != 16; rommd5i++) pxml += sprintf(pxml, "%02x", rommd5[rommd5i]);
 			pxml += sprintf(pxml, "\" sha1=\"");
 			for (int romsha1i = 0; romsha1i != 20; romsha1i++) pxml += sprintf(pxml, "%02x", romsha1[romsha1i]);
-			pxml += sprintf(pxml, "\">\n");
+			pxml += sprintf(pxml, "\"%s>\n", ((!noData || isAudio) ? "" : "/"));
 
-			Bit32u srccrc32; Bit8u srcmd5[16], srcsha1[20];
-			if (track_data != enc.rombuf) { srccrc32 = CRC32(track_data, (size_t)track_size); FastMD5(track_data, (size_t)track_size, srcmd5); SHA1(track_data, (size_t)track_size, srcsha1); }
-			else { srccrc32 = romcrc32; memcpy(srcmd5, rommd5, sizeof(srcmd5)); memcpy(srcsha1, romsha1, sizeof(srcsha1)); }
+			if (!noData || isAudio)
+			{
+				pxml += sprintf(pxml, "\t\t\t<source type=\"%s\" frames=\"%d\"", mt_type, mt_frames);
+				if (mt_pregap) pxml += sprintf(pxml, " %spregap=\"%d\"", ((mt_pregap && mt_pgtype[0] != 'V') ? "omitted_" : ""), mt_pregap);
+				pxml += sprintf(pxml, " duration=\"%02d:%02d:%02d\"", (mt_frames/75/60), (mt_frames/75)%60, mt_frames%75);
+				if (isAudio)
+				{
+					Bit8u srcmd5[16], srcsha1[20];
+					Bit32u srccrc32 = CRC32(enc.wavpcm, enc.wavpcmlen);
+					FastMD5(enc.wavpcm, enc.wavpcmlen, srcmd5);
+					SHA1(enc.wavpcm, enc.wavpcmlen, srcsha1);
 
-			pxml += sprintf(pxml, "\t\t\t<source frames=\"%d\" pregap=\"%d\" duration=\"%02d:%02d:%02d\" size=\"%u\" crc=\"%08x\" md5=\"", mt_frames, mt_pregap, ((mt_frames/75/60)%100), (mt_frames/75)%60, mt_frames%75, (Bit32u)track_size, srccrc32);
-			for (int srcmd5i = 0; srcmd5i != 16; srcmd5i++) pxml += sprintf(pxml, "%02x", srcmd5[srcmd5i]);
-			pxml += sprintf(pxml, "\" sha1=\"");
-			for (int srcsha1i = 0; srcsha1i != 20; srcsha1i++) pxml += sprintf(pxml, "%02x", srcsha1[srcsha1i]);
-			if (isAudio) pxml += sprintf(pxml, "\" in_zeros=\"%u\" out_zeros=\"%u\" trimmed_crc=\"%08x\" quality=\"%d", in_zeros, out_zeros, CRC32(track_data + in_zeros, (size_t)(track_size - in_zeros - out_zeros)), quality);
-			if (isAudio && pregap_size > in_zeros) pxml += sprintf(pxml, "\" non_silence_pregap=\"1");
-			pxml += sprintf(pxml, "\"/>\n\t\t</rom>\n", in_zeros, out_zeros, CRC32(track_data + in_zeros, (size_t)(track_size - in_zeros - out_zeros)), quality);
+					pxml += sprintf(pxml, " size=\"%u\" crc=\"%08x\" md5=\"", (Bit32u)enc.wavpcmlen, srccrc32);
+					for (int srcmd5i = 0; srcmd5i != 16; srcmd5i++) pxml += sprintf(pxml, "%02x", srcmd5[srcmd5i]);
+					pxml += sprintf(pxml, "\" sha1=\"");
+					for (int srcsha1i = 0; srcsha1i != 20; srcsha1i++) pxml += sprintf(pxml, "%02x", srcsha1[srcsha1i]);
+					pxml += sprintf(pxml, "\" in_zeros=\"%u\" out_zeros=\"%u\" quality=\"%d\"", wav_in_zeros, wav_out_zeros, quality);
+					if (non_silence_pregap) pxml += sprintf(pxml, " non_silence_pregap=\"1\"");
+				}
+				pxml += sprintf(pxml, "/>\n\t\t</rom>\n");
+			}
 		}
 		if (enc.rombuf != track_data && enc.rombuf != emptyDataTrackBin) free(enc.rombuf);
 		free(track_data);
