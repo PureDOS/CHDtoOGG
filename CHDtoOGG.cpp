@@ -568,21 +568,36 @@ int main(int argc, const char** argv)
 	free(chd_hunkmap);
 	chd_hunkmap = NULL;
 
+	std::string cue;
+	for (size_t itrk = 0; itrk != cueTracks.size(); itrk++)
+	{
+		if (!cueTracks[itrk].size()) { fprintf(stderr, "Error: CHD misses track %u (but has track %u)\n\n", (unsigned)(itrk + 1), (unsigned)(itrk + 2)); goto chderr; }
+		cue.append(&cueTracks[itrk][0]);
+	}
+
+	fprintf(stderr, "\nFinished processing all tracks, writing CUE file %s ...\n", outPathCUE);
+	fwrite(cue.c_str(), cue.length(), 1, fCUE);
+	fclose(fCUE);
+	fprintf(stderr, "Done!\n");
+
 	if (showXML)
 	{
 		fprintf(stderr, "\nPrinting XML elements to standard output ...\n---------------------------------------------------------------------------\n");
 		for (size_t itrk = 0; itrk != cueTracks.size(); itrk++)
 			if (xmlTracks[itrk].size()) printf("%s", &xmlTracks[itrk][0]);
+		Bit32u romcrc32 = CRC32(cue.c_str(), cue.length());
+		Bit8u rommd5[16], romsha1[20];
+		FastMD5(cue.c_str(), cue.length(), rommd5);
+		SHA1((const Bit8u*)cue.c_str(), cue.length(), romsha1);
+		printf("\t\t<rom name=\"%s\" size=\"%u\" crc=\"%08x\" md5=\"", (outPathCUE + pathDirLen), (unsigned)cue.length(), romcrc32);
+		for (size_t posAmp = pathDirLen - 1; (posAmp = pathTrack.find('&', posAmp + 1)) != std::string::npos;) pathTrack.replace(posAmp + 1, 4, ""); // revert &amp; to &
+		for (int rommd5i = 0; rommd5i != 16; rommd5i++) printf("%02x", rommd5[rommd5i]);
+		printf("\" sha1=\"");
+		for (int romsha1i = 0; romsha1i != 20; romsha1i++) printf("%02x", romsha1[romsha1i]);
+		printf("\"/>\n");
 		fprintf(stderr, "---------------------------------------------------------------------------\nDone!\n");
 	}
 
-	fprintf(stderr, "\nFinished processing all tracks, writing CUE file %s ...\n", outPathCUE);
-	for (size_t itrk = 0; itrk != cueTracks.size(); itrk++)
-	{
-		if (!cueTracks[itrk].size()) { fprintf(stderr, "Error: CHD misses track %u (but has track %u)\n\n", (unsigned)(itrk + 1), (unsigned)(itrk + 2)); goto chderr; }
-		fwrite(&cueTracks[itrk][0], strlen(&cueTracks[itrk][0]), 1, fCUE);
-	}
-	fprintf(stderr, "Done!\n");
 	return 0;
 }
 
