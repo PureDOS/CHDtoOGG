@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2024 https://github.com/PureDOS
+Copyright (c) 2024-2025 https://github.com/PureDOS
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
@@ -304,7 +304,7 @@ int main(int argc, const char** argv)
 			"  -q <LEVEL> : Quality level 0 to 10, defaults to 8\n"
 			"  -n         : Output an empty data track\n"
 			"  -x         : Print XML DAT meta data\n"
-			"\n", "CHDtoOGG", "1.4");
+			"\n", "CHDtoOGG", "1.5");
 		return 1;
 	}
 	int qualityRaw = (qualityStr ? atoi(qualityStr) : 8);
